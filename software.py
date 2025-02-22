@@ -1,66 +1,73 @@
-import sqlite3
 from datetime import datetime
+import hashlib
+import getpass
 
-def criar_tabela():
-    conexao = sqlite3.connect("portaria.db")
-    cursor = conexao.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS registros (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cpf TEXT NOT NULL,
-            matricula TEXT NOT NULL,
-            empresa TEXT NOT NULL,
-            data_hora TEXT NOT NULL,
-            tipo TEXT NOT NULL
-        )
-    ''')
-    conexao.commit()
-    conexao.close()
+registros = []
+usuarios = {}
 
-def registrar_movimentacao(cpf, matricula, empresa, tipo):
-    conexao = sqlite3.connect("portaria.db")
-    cursor = conexao.cursor()
+def cadastrar_usuario():
+    usuario = input("Informe um nome de usuário: ")
+    cpf = input("Informe o CPF: ")
+    empresa = input("Informe o nome da empresa: ")
+    senha = getpass.getpass("Informe uma senha: ")
+    senha_hash = hashlib.sha256(senha.encode()).hexdigest()
+    usuarios[usuario] = {"senha": senha_hash, "empresa": empresa, "cpf": cpf}
+    print("Usuário cadastrado com sucesso!")
+
+def autenticar_usuario():
+    usuario = input("Informe seu usuário: ")
+    senha = getpass.getpass("Informe sua senha: ")
+    senha_hash = hashlib.sha256(senha.encode()).hexdigest()
+    if usuario in usuarios and usuarios[usuario]["senha"] == senha_hash:
+        print("Autenticação bem-sucedida!")
+        return usuario
+    else:
+        print("Usuário ou senha incorretos!")
+        return None
+
+def registrar_movimentacao(usuario, matricula, passagem_policia, pcd, tipo):
     data_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    cursor.execute("INSERT INTO registros (cpf, matricula, empresa, data_hora, tipo) VALUES (?, ?, ?, ?, ?)",
-                   (cpf, matricula, empresa, data_hora, tipo))
-    conexao.commit()
-    conexao.close()
+    empresa = usuarios[usuario]["empresa"]
+    cpf = usuarios[usuario]["cpf"]
+    registros.append({
+        "cpf": cpf,
+        "matricula": matricula,
+        "empresa": empresa,
+        "passagem_policia": passagem_policia,
+        "pcd": pcd,
+        "data_hora": data_hora,
+        "tipo": tipo
+    })
     print(f"{tipo} registrada com sucesso para {cpf} às {data_hora}.")
 
 def listar_registros():
-    conexao = sqlite3.connect("portaria.db")
-    cursor = conexao.cursor()
-    cursor.execute("SELECT * FROM registros")
-    registros = cursor.fetchall()
-    conexao.close()
-    
     print("\nRegistros de Movimentação:")
     for reg in registros:
-        print(f"ID: {reg[0]} | CPF: {reg[1]} | Matrícula: {reg[2]} | Empresa: {reg[3]} | Data/Hora: {reg[4]} | Tipo: {reg[5]}")
+        print(f"CPF: {reg['cpf']} | Matrícula: {reg['matricula']} | Empresa: {reg['empresa']} | Passagem pela Polícia: {reg['passagem_policia']} | PCD: {reg['pcd']} | Data/Hora: {reg['data_hora']} | Tipo: {reg['tipo']}")
 
 def menu():
-    criar_tabela()
     while True:
         print("\n===== Sistema de Controle de Portaria =====")
-        print("1. Registrar Entrada")
-        print("2. Registrar Saída")
-        print("3. Listar Registros")
-        print("4. Sair")
+        print("1. Cadastrar Usuário")
+        print("2. Registrar Entrada")
+        print("3. Registrar Saída")
+        print("4. Listar Registros")
+        print("5. Sair")
         opcao = input("Escolha uma opção: ")
         
         if opcao == "1":
-            cpf = input("Informe o CPF: ")
-            matricula = input("Informe a Matrícula: ")
-            empresa = input("Informe a Empresa: ")
-            registrar_movimentacao(cpf, matricula, empresa, "Entrada")
-        elif opcao == "2":
-            cpf = input("Informe o CPF: ")
-            matricula = input("Informe a Matrícula: ")
-            empresa = input("Informe a Empresa: ")
-            registrar_movimentacao(cpf, matricula, empresa, "Saída")
-        elif opcao == "3":
-            listar_registros()
+            cadastrar_usuario()
+        elif opcao in ["2", "3"]:
+            usuario = autenticar_usuario()
+            if usuario:
+                matricula = input("Informe a Matrícula: ")
+                passagem_policia = input("Já teve passagem pela polícia? (Sim/Não): ")
+                pcd = input("É PCD? (Sim/Não): ")
+                tipo = "Entrada" if opcao == "2" else "Saída"
+                registrar_movimentacao(usuario, matricula, passagem_policia, pcd, tipo)
         elif opcao == "4":
+            listar_registros()
+        elif opcao == "5":
             print("Encerrando o sistema...")
             break
         else:
