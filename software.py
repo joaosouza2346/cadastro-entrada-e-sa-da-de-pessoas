@@ -1,14 +1,10 @@
-
-     from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLineEdit, QPushButton, QLabel, QComboBox, QTableWidget, \
-    QTableWidgetItem, QFormLayout, QDialog, QDialogButtonBox
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLineEdit, QPushButton, QLabel, QComboBox, QTableWidget, \
+    QTableWidgetItem, QFormLayout, QDialog, QDialogButtonBox, QInputDialog
 from PyQt5.QtCore import Qt
 from datetime import datetime
 import hashlib
-import getpass
 import re
-import json
-import os
-
+import sqlite3
 
 class SistemaPortariaApp(QWidget):
     def __init__(self):
@@ -17,13 +13,9 @@ class SistemaPortariaApp(QWidget):
         self.setWindowTitle("Sistema de Controle de Portaria - MPRJ CSI")
         self.setGeometry(300, 300, 600, 400)
 
-        # Carregar registros salvos ao iniciar
-        self.registros = []
-        self.usuarios = {}
-        self.ARQUIVO_REGISTROS = "registros_mprj_csi.json"
-        if os.path.exists(self.ARQUIVO_REGISTROS):
-            with open(self.ARQUIVO_REGISTROS, "r") as f:
-                self.registros = json.load(f)
+        # Conectar ao banco de dados SQLite
+        self.conn = sqlite3.connect("portaria_mprj_csi.db")
+        self.criar_tabelas()
 
         # Layout principal
         self.layout = QVBoxLayout()
@@ -31,6 +23,39 @@ class SistemaPortariaApp(QWidget):
 
         # Exibir as opções
         self.menu()
+
+    def criar_tabelas(self):
+        # Criar tabelas se não existirem
+        cursor = self.conn.cursor()
+        # Tabela de usuários
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS usuarios (
+                usuario TEXT PRIMARY KEY,
+                senha TEXT NOT NULL,
+                cpf TEXT UNIQUE NOT NULL,
+                nome TEXT NOT NULL,
+                cargo TEXT NOT NULL,
+                empresa TEXT NOT NULL,
+                nivel_acesso TEXT NOT NULL
+            )
+        ''')
+        # Tabela de registros
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS registros (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cpf TEXT NOT NULL,
+                nome TEXT NOT NULL,
+                matricula TEXT NOT NULL,
+                empresa TEXT NOT NULL,
+                passagem_policia TEXT NOT NULL,
+                pcd TEXT NOT NULL,
+                data_hora TEXT NOT NULL,
+                tipo TEXT NOT NULL,
+                registrado_por TEXT NOT NULL,
+                FOREIGN KEY (cpf) REFERENCES usuarios(cpf)
+            )
+        ''')
+        self.conn.commit()
 
     def menu(self):
         self.clear_layout()
@@ -44,7 +69,6 @@ class SistemaPortariaApp(QWidget):
         self.layout.addWidget(QPushButton("Sair", clicked=self.close))
 
     def clear_layout(self):
-        # Limpar todos os widgets da tela
         for i in reversed(range(self.layout.count())):
             widget = self.layout.itemAt(i).widget()
             if widget is not None:
@@ -57,7 +81,6 @@ class SistemaPortariaApp(QWidget):
     def cadastrar_usuario(self):
         self.clear_layout()
 
-        # Caixa para cadastrar o usuário
         self.form_layout = QFormLayout()
         self.layout.addLayout(self.form_layout)
 
@@ -91,45 +114,38 @@ class SistemaPortariaApp(QWidget):
 
     def salvar_usuario(self):
         usuario = self.usuario_input.text().strip()
-        if usuario in self.usuarios:
-            self.exibir_mensagem("Usuário já existe!")
-            return
-
         cpf = self.cpf_input.text().strip()
-        if not self.validar_cpf(cpf):
-            self.exibir_mensagem("CPF inválido! Deve conter 11 dígitos numéricos.")
-            return
-
         nome = self.nome_input.text().strip()
         cargo = self.cargo_input.text().strip()
         nivel_acesso = self.nivel_acesso_input.currentText()
         senha = self.senha_input.text().strip()
         senha_hash = hashlib.sha256(senha.encode()).hexdigest()
 
-        self.usuarios[usuario] = {
-            "senha": senha_hash,
-            "cpf": cpf,
-            "nome": nome,
-            "cargo": cargo,
-            "empresa": "MPRJ",
-            "nivel_acesso": nivel_acesso
-        }
-        self.exibir_mensagem(f"Usuário {usuario} cadastrado com sucesso!")
+        if not self.validar_cpf(cpf):
+            self.exibir_mensagem("CPF inválido! Deve conter 11 dígitos numéricos.")
+            return
+
+        cursor = self.conn.cursor()
+        try:
+            cursor.execute('''
+                INSERT INTO usuarios (usuario, senha, cpf, nome, cargo, empresa, nivel_acesso)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (usuario, senha_hash, cpf, nome, cargo, "MPRJ", nivel_acesso))
+            self.conn.commit()
+            self.exibir_mensagem(f"Usuário {usuario} cadastrado com sucesso!")
+        except sqlite3.IntegrityError:
+            self.exibir_mensagem("Usuário ou CPF já existe!")
 
     def exibir_mensagem(self, mensagem):
-        # Caixa de mensagem de erro
         dialog = QDialog(self)
         dialog.setWindowTitle("Mensagem")
         dialog.setModal(True)
-
         layout = QVBoxLayout()
         layout.addWidget(QLabel(mensagem))
         dialog.setLayout(layout)
-
         button_box = QDialogButtonBox(QDialogButtonBox.Ok)
         layout.addWidget(button_box)
-        button_box.rejected.connect(dialog.reject)
-
+        button_box.accepted.connect(dialog.accept)
         dialog.exec_()
 
     def autenticar_usuario(self):
@@ -142,7 +158,10 @@ class SistemaPortariaApp(QWidget):
             return None
 
         senha_hash = hashlib.sha256(senha.encode()).hexdigest()
-        if usuario in self.usuarios and self.usuarios[usuario]["senha"] == senha_hash:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT senha FROM usuarios WHERE usuario = ?", (usuario,))
+        resultado = cursor.fetchone()
+        if resultado and resultado[0] == senha_hash:
             return usuario
         else:
             self.exibir_mensagem("Usuário ou senha incorretos!")
@@ -155,9 +174,7 @@ class SistemaPortariaApp(QWidget):
             passagem_policia, _ = QInputDialog.getItem(self, "Registro de Entrada", "Já teve passagem pela polícia?",
                                                        ["Sim", "Não"], 0, False)
             pcd, _ = QInputDialog.getItem(self, "Registro de Entrada", "É PCD?", ["Sim", "Não"], 0, False)
-
-            tipo = "Entrada"
-            self.registrar_movimentacao(usuario, matricula, passagem_policia, pcd, tipo)
+            self.registrar_movimentacao(usuario, matricula, passagem_policia, pcd, "Entrada")
 
     def registrar_saida(self):
         usuario = self.autenticar_usuario()
@@ -166,51 +183,50 @@ class SistemaPortariaApp(QWidget):
             passagem_policia, _ = QInputDialog.getItem(self, "Registro de Saída", "Já teve passagem pela polícia?",
                                                        ["Sim", "Não"], 0, False)
             pcd, _ = QInputDialog.getItem(self, "Registro de Saída", "É PCD?", ["Sim", "Não"], 0, False)
-
-            tipo = "Saída"
-            self.registrar_movimentacao(usuario, matricula, passagem_policia, pcd, tipo)
+            self.registrar_movimentacao(usuario, matricula, passagem_policia, pcd, "Saída")
 
     def registrar_movimentacao(self, usuario, matricula, passagem_policia, pcd, tipo):
         data_hora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        registro = {
-            "cpf": self.usuarios[usuario]["cpf"],
-            "nome": self.usuarios[usuario]["nome"],
-            "matricula": matricula,
-            "empresa": "MPRJ",
-            "passagem_policia": passagem_policia,
-            "pcd": pcd,
-            "data_hora": data_hora,
-            "tipo": tipo,
-            "registrado_por": usuario
-        }
-        self.registros.append(registro)
-        with open(self.ARQUIVO_REGISTROS, "w") as f:
-            json.dump(self.registros, f, indent=4)
-        self.exibir_mensagem(f"{tipo} registrada com sucesso para {registro['nome']} às {data_hora}.")
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT cpf, nome FROM usuarios WHERE usuario = ?", (usuario,))
+        resultado = cursor.fetchone()
+        if resultado:
+            cpf, nome = resultado
+            cursor.execute('''
+                INSERT INTO registros (cpf, nome, matricula, empresa, passagem_policia, pcd, data_hora, tipo, registrado_por)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (cpf, nome, matricula, "MPRJ", passagem_policia, pcd, data_hora, tipo, usuario))
+            self.conn.commit()
+            self.exibir_mensagem(f"{tipo} registrada com sucesso para {nome} às {data_hora}.")
 
     def listar_registros(self):
         self.clear_layout()
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT nome, cpf, matricula, passagem_policia, pcd, data_hora, tipo FROM registros")
+        registros = cursor.fetchall()
 
-        if not self.registros:
+        if not registros:
             self.exibir_mensagem("Nenhum registro encontrado.")
             return
 
-        table = QTableWidget(len(self.registros), 7)
+        table = QTableWidget(len(registros), 7)
         table.setHorizontalHeaderLabels(["Nome", "CPF", "Matrícula", "Passagem Polícia", "PCD", "Data/Hora", "Tipo"])
         self.layout.addWidget(table)
 
-        for row, reg in enumerate(self.registros):
-            table.setItem(row, 0, QTableWidgetItem(reg['nome']))
-            table.setItem(row, 1, QTableWidgetItem(reg['cpf']))
-            table.setItem(row, 2, QTableWidgetItem(reg['matricula']))
-            table.setItem(row, 3, QTableWidgetItem(reg['passagem_policia']))
-            table.setItem(row, 4, QTableWidgetItem(reg['pcd']))
-            table.setItem(row, 5, QTableWidgetItem(reg['data_hora']))
-            table.setItem(row, 6, QTableWidgetItem(reg['tipo']))
+        for row, reg in enumerate(registros):
+            for col, value in enumerate(reg):
+                table.setItem(row, col, QTableWidgetItem(value))
+
+        voltar_button = QPushButton("Voltar")
+        voltar_button.clicked.connect(self.menu)
+        self.layout.addWidget(voltar_button)
 
     def buscar_registro_por_cpf(self):
         cpf, _ = QInputDialog.getText(self, "Buscar Registro por CPF", "Informe o CPF:")
-        encontrados = [reg for reg in self.registros if reg["cpf"] == cpf]
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT nome, matricula, tipo, data_hora FROM registros WHERE cpf = ?", (cpf,))
+        encontrados = cursor.fetchall()
+
         if not encontrados:
             self.exibir_mensagem("Nenhum registro encontrado para este CPF.")
         else:
@@ -220,14 +236,21 @@ class SistemaPortariaApp(QWidget):
             self.layout.addWidget(table)
 
             for row, reg in enumerate(encontrados):
-                table.setItem(row, 0, QTableWidgetItem(reg['nome']))
-                table.setItem(row, 1, QTableWidgetItem(reg['matricula']))
-                table.setItem(row, 2, QTableWidgetItem(reg['tipo']))
-                table.setItem(row, 3, QTableWidgetItem(reg['data_hora']))
+                for col, value in enumerate(reg):
+                    table.setItem(row, col, QTableWidgetItem(value))
 
+            voltar_button = QPushButton("Voltar")
+            voltar_button.clicked.connect(self.menu)
+            self.layout.addWidget(voltar_button)
+
+    def closeEvent(self, event):
+        # Fecha a conexão com o banco de dados ao sair
+        self.conn.close()
+        event.accept()
 
 if __name__ == "__main__":
     app = QApplication([])
     window = SistemaPortariaApp()
     window.show()
     app.exec_()
+
